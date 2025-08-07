@@ -14,6 +14,41 @@ public:
     std::size_t         _bit_len = 0;
 
 public:
+    static int compare(const big_int& a, const big_int& b)
+    {
+        if (a._bit_len != b._bit_len)
+            return a._bit_len > b._bit_len ? 1 : -1;
+
+        std::size_t n = a._v.size();
+        for (std::size_t i = 0; i < n; ++i) {
+            limb_t ai = a._v[n - 1 - i];
+            limb_t bi = b._v[n - 1 - i];
+            if (ai != bi) return ai > bi ? 1 : -1;
+        }
+        return 0;
+    }
+
+    bool operator==(const big_int& rhs) const { return compare(*this, rhs) == 0; }
+    bool operator!=(const big_int& rhs) const { return compare(*this, rhs) != 0; }
+
+    bool operator< (const big_int& rhs) const { return compare(*this, rhs) < 0; }
+    bool operator<=(const big_int& rhs) const { return compare(*this, rhs) <= 0; }
+    bool operator> (const big_int& rhs) const { return compare(*this, rhs) > 0; }
+    bool operator>=(const big_int& rhs) const { return compare(*this, rhs) >= 0; }
+
+    std::uint32_t mod_uint32(std::uint32_t m) const
+    {
+        if (m == 0) throw std::invalid_argument("mod_uint32: divide by zero");
+        if (_bit_len == 0) return 0;
+
+        std::uint64_t r = 0;
+        for (std::size_t i = _v.size(); i-- > 0; ) {
+            r = (r << 32) + _v[i];                // build 64-bit word
+            r %= m;                               // always < m afterwards
+        }
+        return static_cast<std::uint32_t>(r);
+    }
+
     // O(N^2) IMPROVE IMPROVE IMPROVE
     std::string dec_to_bin(const std::string& dec) const
     {
@@ -39,28 +74,6 @@ public:
         std::reverse(bits.begin(), bits.end());
         return bits;
     }
-
-    static int compare(const big_int& a, const big_int& b)
-    {
-        if (a._bit_len != b._bit_len)
-            return a._bit_len > b._bit_len ? 1 : -1;
-
-        std::size_t n = a._v.size();
-        for (std::size_t i = 0; i < n; ++i) {
-            limb_t ai = a._v[n - 1 - i];
-            limb_t bi = b._v[n - 1 - i];
-            if (ai != bi) return ai > bi ? 1 : -1;
-        }
-        return 0;
-    }
-
-    bool operator==(const big_int& rhs) const { return compare(*this, rhs) == 0; }
-    bool operator!=(const big_int& rhs) const { return compare(*this, rhs) != 0; }
-
-    bool operator< (const big_int& rhs) const { return compare(*this, rhs) < 0; }
-    bool operator<=(const big_int& rhs) const { return compare(*this, rhs) <= 0; }
-    bool operator> (const big_int& rhs) const { return compare(*this, rhs) > 0; }
-    bool operator>=(const big_int& rhs) const { return compare(*this, rhs) >= 0; }
 
     void shl1()
     {

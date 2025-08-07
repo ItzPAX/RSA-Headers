@@ -1,11 +1,7 @@
 #pragma once
-#include <random>
-#include <fstream>
-#include <sstream>
-#include "bigint.hpp"
 
 // https://github.com/czkz/base64/blob/master/base64.h
-namespace base64 
+namespace base64
 {
 	[[nodiscard]] inline std::string to_base64(std::string_view data);
 	[[nodiscard]] inline std::string to_base64(const void* data, size_t size_bytes);
@@ -100,15 +96,21 @@ namespace base64
 			out[i / 3 * 4 + 3] = a[(s[i + 2] & 0b00111111)];
 		}
 		switch (origLen % 3) {
-		case 2:
-			out[i / 3 * 4 + 0] = a[(s[i] & 0b11111100) >> 2];
-			out[i / 3 * 4 + 1] = a[(s[i + 0] & 0b00000011) << 4 | (s[i + 1] & 0b11110000) >> 4];
-			out[i / 3 * 4 + 2] = a[(s[i + 1] & 0b00001111) << 2 | (s[i + 2] & 0b11000000) >> 6];
+
+		case 2: {                                         // TWO bytes remain
+			out[i / 3 * 4 + 0] = a[(s[i] & 0xFC) >> 2];
+			out[i / 3 * 4 + 1] = a[(s[i] & 0x03) << 4 | (s[i + 1] & 0xF0) >> 4];
+			out[i / 3 * 4 + 2] = a[(s[i + 1] & 0x0F) << 2];     // last 2 bits are 0
+			/* out[i/3*4+3] already '=' */
 			break;
-		case 1:
-			out[i / 3 * 4 + 0] = a[(s[i] & 0b11111100) >> 2];
-			out[i / 3 * 4 + 1] = a[(s[i + 0] & 0b00000011) << 4 | (s[i + 1] & 0b11110000) >> 4];
+		}
+
+		case 1: {                                         // ONE byte remains
+			out[i / 3 * 4 + 0] = a[(s[i] & 0xFC) >> 2];
+			out[i / 3 * 4 + 1] = a[(s[i] & 0x03) << 4];     // last 4 bits are 0
+			/* out[i/3*4+2] and +3 stay '=' */
 			break;
+		}
 		}
 		return ret;
 	}
@@ -178,14 +180,54 @@ namespace base64
 	}
 }
 
+#include <fstream>
+#include <sstream>
+
+#include "bigint.hpp"
+
+#include <windows.h>
+#include <bcrypt.h>
+#pragma comment(lib, "bcrypt.lib")
+
+namespace s_rng
+{
+	inline void secure_random_bytes(void* buf, std::size_t len)
+	{
+		if (BCryptGenRandom(nullptr,
+			static_cast<PUCHAR>(buf),
+			static_cast<ULONG>(len),
+			BCRYPT_USE_SYSTEM_PREFERRED_RNG) != 0)
+			throw std::system_error(GetLastError(),
+				std::system_category(),
+				"BCryptGenRandom failed");
+	}
+	class secure_rng
+	{
+	public:
+		using result_type = std::uint64_t;
+
+		static constexpr result_type _min() { return 0; }
+		static constexpr result_type _max() { return ~result_type(0); }
+
+		result_type operator()()
+		{
+			result_type r;
+			secure_random_bytes(&r, sizeof(r));
+			return r;
+		}
+	};
+}
+
 static const int MR_BASE[12] = { 2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37 };
 
 enum KEY_LENGTH
 {
+	RSA32 = 32,    // for testing only
 	RSA256 = 256,   // Unsafe
 	RSA1024 = 1024, // Unsafe
 	RSA2048 = 2048, // Recommended for short lived signatures
-	RSA4096 = 4096, // For security to 2030+ (!!!)KEY GENERATION CAN TAKE A FEW SECONDS(!!!)
+	RSA3072 = 3072, // Recommended for normal messages
+	RSA4096 = 4096, // For high security to 2030+ (!!!)KEY GENERATION CAN TAKE A FEW SECONDS(!!!)
 };
 
 struct rsa_pub
@@ -209,31 +251,34 @@ class rsa
 {
 private:
 	KEY_LENGTH _kl;
-	std::uniform_int_distribution<std::uint64_t> u64;
-	int small_primes[512];
+	s_rng::secure_rng rng;
+
+	int small_primes[50000];
 
 public:
 	rsa(KEY_LENGTH kl)
 		: _kl(kl)
 	{
 		fill_small_primes();
-		u64 = std::uniform_int_distribution<std::uint64_t>(0, ~0ULL);
 	}
 
 private:
 	void fill_small_primes()
 	{
-		for (int i = 2, primes_found = 0; primes_found < sizeof(small_primes) / sizeof(int); i++)
-		{
-			bool prime = true;
-			for (int j = 2; j < i; j++)
-			{
-				if (i % j == 0) { prime = false; break; }
-			}
+		constexpr std::size_t N_PRIMES = sizeof(small_primes) / sizeof(int);     // 50 000
+		const std::size_t limit =
+			static_cast<std::size_t>(N_PRIMES *
+				(std::log(N_PRIMES) + std::log(std::log(N_PRIMES)))) + 50;
 
-			if (prime)
-			{
-				small_primes[primes_found++] = i;
+		std::vector<bool> is_composite(limit + 1, false);
+
+		std::size_t count = 0;
+		for (std::size_t p = 2; p <= limit && count < N_PRIMES; ++p) {
+			if (!is_composite[p]) {
+				small_primes[count++] = static_cast<int>(p);
+				if (p * p <= limit)                 // avoid overflow
+					for (std::size_t m = p * p; m <= limit; m += p)
+						is_composite[m] = true;
 			}
 		}
 	}
@@ -277,7 +322,7 @@ private:
 		return e;
 	}
 
-	big_int random_in_range(const big_int& min, const big_int& max, std::mt19937_64& gen)
+	big_int random_in_range(const big_int& min, const big_int& max)
 	{
 		if (big_int::compare(min, max) > 0)
 			throw std::invalid_argument("random_in_range: min > max");
@@ -289,7 +334,7 @@ private:
 
 		big_int r;
 		do {
-			r = random_k_bits(k, gen);
+			r = random_k_bits(k);
 		} while (r >= span);
 
 		return min + r;
@@ -297,8 +342,9 @@ private:
 
 	bool divisible_by_small(const big_int& n)
 	{
-		for (int p : small_primes)
-			if ((n % big_int(p)).is_zero()) return true;
+		for (std::uint32_t p : small_primes)
+			if (n.mod_uint32(p) == 0)
+				return true;
 		return false;
 	}
 
@@ -332,15 +378,13 @@ private:
 		return true;
 	}
 
-	big_int random_k_bits(std::size_t k, std::mt19937_64& gen)
+	big_int random_k_bits(std::size_t k)
 	{
 		if (k == 0) return big_int();
 
-		static std::uniform_int_distribution<std::uint32_t> u32;
-
 		big_int r;
 		r._v.resize((k + 31) / 32);
-		for (auto& limb : r._v) limb = u32(gen);
+		for (auto& limb : r._v) limb = rng();
 
 		std::size_t hi_bits = k & 31;
 
@@ -355,6 +399,7 @@ private:
 
 		r._v[0] |= 1u;
 		r.trim();
+
 		return r;
 	}
 
@@ -364,14 +409,12 @@ public:
 		std::size_t lp = (_kl + 1) / 2;
 		std::size_t lq = _kl - lp;
 
-		std::random_device rd; std::mt19937_64 gen(rd());
-
 		big_int p, q;
 		do {
-			p = random_k_bits(lp, gen);
+			p = random_k_bits(lp);
 		} while (!probably_prime(p));
 		do {
-			q = random_k_bits(lp, gen);
+			q = random_k_bits(lp);
 		} while (!probably_prime(q));
 
 		big_int n = p * q;
@@ -412,7 +455,7 @@ public:
 
 		for (std::size_t off = 0; off < bytes.size(); off += plain_bytes)
 		{
-			std::size_t len = std::min(plain_bytes, bytes.size() - off);
+			std::size_t len = min(plain_bytes, bytes.size() - off);
 
 			std::vector<std::uint8_t> block(bytes.begin() + off,
 				bytes.begin() + off + len);
@@ -520,7 +563,7 @@ public:
 		if (r != big_int(1))
 			throw std::invalid_argument("modinv: numbers are not coprime");
 
-		return t;                            // already 0 … m-1
+		return t;
 	}
 };
 
@@ -539,8 +582,8 @@ namespace key_export
 	{
 		std::vector<std::uint8_t> v = rsa::bigint_to_bytes(x);
 		if (v.empty()) v.push_back(0);
-		if (v.back() & 0x80) v.push_back(0);          // force positive
-		std::string s(v.rbegin(), v.rend());          // big-endian
+		if (v.back() & 0x80) v.push_back(0);
+		std::string s(v.rbegin(), v.rend());
 		return std::string(1, 0x02) + der_len(s.size()) + s;
 	}
 
