@@ -186,10 +186,9 @@ namespace base64
 #include "bigint.hpp"
 #include "oaeppss.hpp"
 
-static const int MR_BASE[12] = { 2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37 };
-
 enum KEY_LENGTH
 {
+	RSA530 = 530,   // Very unsafe, lowest OAEPPSS compliant key size (!!!)Causes high padding memory inefficient(!!!)
 	RSA1024 = 1024, // Unsafe for testing only
 	RSA2048 = 2048, // Recommended for short lived signatures
 	RSA3072 = 3072, // Recommended for normal messages
@@ -315,7 +314,7 @@ private:
 		return false;
 	}
 
-	bool probably_prime(const big_int& n)
+	bool probably_prime(const big_int& n, int rounds = 32)
 	{
 		if (n <= big_int(3))   return n == big_int(2) || n == big_int(3);
 		if (!n.is_odd())       return false;
@@ -327,22 +326,23 @@ private:
 
 		barrett::barrett_ctx ctx = barrett::make_ctx(n);
 
-		for (int a_int : MR_BASE) {
-			if (big_int(a_int) >= n) continue;
+		for (int i = 0; i < rounds; ++i) {
+			big_int a;
+			do {
+				a = random_in_range(2, n - 2);  // uniform random base
+			} while (gcd(a, n) != 1);
 
-			big_int a(a_int);
 			big_int x = barrett::f_powmod(a, d, ctx);
-
 			if (x == 1 || x == n - 1) continue;
 
-			bool passed = false;
-			for (std::size_t r = 1; r < s; ++r) {
-				x = barrett::f_powmod(x, big_int(2), ctx);
-				if (x == n - 1) { passed = true; break; }
+			bool cont = false;
+			for (int r = 1; r < s; ++r) {
+				x = barrett::f_powmod(x, 2, ctx);
+				if (x == n - 1) { cont = true; break; }
 			}
-			if (!passed) return false;
+			if (!cont) return false;
 		}
-		return true;
+		return true; // probably prime
 	}
 
 	big_int random_k_bits(std::size_t k)
@@ -370,6 +370,23 @@ private:
 		return r;
 	}
 
+	// check if our prime is ultra weak
+	bool has_tiny_neighbor_factor(const big_int& p) {
+		static const uint32_t tiny_primes[] = {
+			3, 5, 7, 11, 13, 17, 19, 23, 29, 31,
+			37, 41, 43, 47, 53, 59, 61, 67, 71
+		};
+
+		big_int neighbor = (p - 1) >> 1;
+
+		for (uint32_t sp : tiny_primes) {
+			if (neighbor.mod_uint32(sp) == 0) {
+				return true;
+			}
+		}
+		return false;
+	}
+
 public:
 	std::pair<rsa_pub, rsa_priv> generate_key_pair()
 	{
@@ -377,12 +394,23 @@ public:
 		std::size_t lq = _kl - lp;
 
 		big_int p, q;
-		do {
+		static big_int assumed_e(65537); // assume 65537 will be the exponent
+
+		while (true) {
 			p = random_k_bits(lp);
-		} while (!probably_prime(p));
-		do {
+			if (!probably_prime(p)) continue;
+			if (gcd(assumed_e, p - 1) != 1) continue;
+			if (_kl <= RSA1024 && has_tiny_neighbor_factor(p)) continue; // only worth it for small keys
+			break;
+		}
+
+		while (true) {
 			q = random_k_bits(lq);
-		} while (!probably_prime(q));
+			if (!probably_prime(q)) continue;
+			if (gcd(assumed_e, q - 1) != 1) continue;
+			if (_kl <= RSA1024 && has_tiny_neighbor_factor(q)) continue; // only worth it for small keys
+			break;
+		}
 
 		big_int n = p * q;
 		if (n._bit_len != _kl) return generate_key_pair();
@@ -428,25 +456,25 @@ public:
 	// Big-endian octet-string -> big_int
 	inline big_int OS2IP(const std::vector<uint8_t>& be)
 	{
-		std::vector<uint8_t> le(be.rbegin(), be.rend()); // flip to little-endian
+		std::vector<uint8_t> le(be.rbegin(), be.rend());
 		return rsa::bytes_to_bigint(le);
 	}
 
 	// big_int -> big-endian octet-string of fixed length k (left-padded)
 	inline std::vector<uint8_t> I2OSP(const big_int& x, std::size_t k)
 	{
-		auto le = rsa::bigint_to_bytes(x);        // little-endian
+		auto le = rsa::bigint_to_bytes(x);
 		if (le.size() > k) throw std::invalid_argument("I2OSP: integer too large");
-		le.resize(k, 0);                           // pad MSB side (which is end in LE)
-		return std::vector<uint8_t>(le.rbegin(), le.rend()); // back to BE
+		le.resize(k, 0);
+		return std::vector<uint8_t>(le.rbegin(), le.rend());
 	}
 
 	// returns a byte string not suitable for network traffic
 	std::string rsa_encrypt(const std::string& str, const rsa_pub& pub)
 	{
-		const std::size_t k = (pub.n._bit_len + 7) / 8;  // modulus bytes
-		const std::size_t hLen = 32;                        // SHA-256
-		const std::size_t maxPT = k - 2 * hLen - 2;            // OAEP payload per block
+		const std::size_t k = (pub.n._bit_len + 7) / 8;
+		const std::size_t hLen = 32;
+		const std::size_t maxPT = k - 2 * hLen - 2;
 
 		if (k < 2 * hLen + 2) throw std::invalid_argument("OAEP: modulus too small");
 
@@ -458,10 +486,10 @@ public:
 			const std::size_t len = min(maxPT, bytes.size() - off);
 			std::vector<uint8_t> block(bytes.begin() + off, bytes.begin() + off + len);
 
-			auto EM = oaeppss::oaep_encode(block, k, rng, { 0x13, 0x37, 0x67, 0x69 });   // EM is big-endian k bytes
+			auto EM = oaeppss::oaep_encode(block, k, rng, { 0x13, 0x37, 0x67, 0x69 });
 			big_int m = OS2IP(EM);
 			big_int c = barrett::f_powmod(m, pub.e, pub.ctx);
-			auto    C = I2OSP(c, k);                         // big-endian k bytes
+			auto    C = I2OSP(c, k);
 
 			encrypted.insert(encrypted.end(), C.begin(), C.end());
 		}
@@ -473,6 +501,9 @@ public:
 	{
 		const std::size_t k = (prv.n._bit_len + 7) / 8;
 
+		big_int r(0);
+		while (r > prv.n || gcd(r, prv.n) != 1) r = random_k_bits(prv.n._bit_len - 1);
+
 		std::vector<uint8_t> bytes(str.begin(), str.end());
 		if (bytes.size() % k != 0)
 			throw std::invalid_argument("ciphertext length not a multiple of block size");
@@ -483,9 +514,19 @@ public:
 		{
 			std::vector<uint8_t> C(bytes.begin() + off, bytes.begin() + off + k);
 			big_int c = OS2IP(C);
-			big_int m = barrett::f_powmod(c, prv.d, prv.ctx);
-			auto    EM = I2OSP(m, k);
 
+			// Blinding
+			big_int r_e = barrett::f_powmod(r, prv.e, prv.ctx);
+			big_int c_blind = barrett::barrett_red(c * r_e, prv.ctx);
+
+			// Private operation on blinded ciphertext
+			big_int m_blind = barrett::f_powmod(c_blind, prv.d, prv.ctx);
+
+			// Unblinding
+			big_int r_inv = modinv(r, prv.n);
+			big_int m = barrett::barrett_red(m_blind * r_inv, prv.ctx);
+
+			auto    EM = I2OSP(m, k);
 			auto M = oaeppss::oaep_decode(EM, { 0x13, 0x37, 0x67, 0x69 });
 			plain.insert(plain.end(), M.begin(), M.end());
 		}
@@ -510,10 +551,24 @@ public:
 		picosha2::hash256(message.begin(), message.end(), mHash, mHash + 32);
 
 		const size_t k = (key.n._bit_len + 7) / 8;
+		
 		auto EM = oaeppss::pss_encode(mHash, key.n._bit_len - 1, rng);
 
 		big_int m = OS2IP(EM);
-		big_int s = barrett::f_powmod(m, key.d, key.ctx);
+
+		big_int r(0);
+		while (r > key.n || gcd(r, key.n) != 1) r = random_k_bits(key.n._bit_len - 1);
+
+		big_int r_e = barrett::f_powmod(r, key.e, key.ctx);
+		big_int m_blind = barrett::barrett_red(m * r_e, key.ctx);
+
+		// Private exponentiation on blinded message
+		big_int s_blind = barrett::f_powmod(m_blind, key.d, key.ctx);
+
+		// Unblind
+		big_int r_inv = modinv(r, key.n);
+		big_int s = barrett::barrett_red(s_blind * r_inv, key.ctx);
+
 		auto   S = I2OSP(s, k);
 		return { S.begin(), S.end() };
 	}
