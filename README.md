@@ -14,6 +14,9 @@ Do **NOT** use this in production environments
 - [ ] fast randomized Miller-Rabin rounds
 - [ ] Montgomery multiplication
 
+## Installation
+Just copy the three header files into your project and include "rsa.hpp" for examples see Usage or examples.cpp
+
 ## Usage
 ### Creating a key pair
 ```cpp
