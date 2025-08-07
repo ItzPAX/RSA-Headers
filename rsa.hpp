@@ -1,5 +1,7 @@
 #pragma once
 #include <random>
+#include <fstream>
+#include <sstream>
 #include "bigint.hpp"
 
 // https://github.com/czkz/base64/blob/master/base64.h
@@ -359,8 +361,6 @@ private:
 public:
 	std::pair<rsa_pub, rsa_priv> generate_key_pair()
 	{
-		std::cout << "generating key pair, this might take some time...\n";
-
 		std::size_t lp = (_kl + 1) / 2;
 		std::size_t lq = _kl - lp;
 
@@ -385,8 +385,6 @@ public:
 		rsa_priv prv{ n, d, p, q };
 		pub.ctx = barrett::make_ctx(n);
 		prv.ctx = barrett::make_ctx(n);
-
-		std::cout << "N: " << n.as_string() << "\nd: " << d.as_string() << "\ne: " << e.as_string() << "\n";
 
 		return { pub, prv };
 	}
@@ -546,6 +544,7 @@ namespace key_export
 		return std::string(1, 0x02) + der_len(s.size()) + s;
 	}
 
+	// PKCS #1
 	std::string export_public_pem(const rsa_pub& pub)
 	{
 		std::string seq = asn1_integer(pub.n) + asn1_integer(pub.e);
@@ -559,6 +558,7 @@ namespace key_export
 			"\n-----END RSA PUBLIC KEY-----\n";
 	}
 
+	// PKCS #1
 	std::string export_private_pem(const rsa_priv& prv)
 	{
 		big_int p = prv.p;
@@ -591,5 +591,140 @@ namespace key_export
 		return "-----BEGIN RSA PRIVATE KEY-----\n" +
 			b64 +
 			"\n-----END RSA PRIVATE KEY-----\n";
+	}
+
+	void export_pub_to_file(const rsa_pub& pub, const std::string& filename)
+	{
+		std::ofstream out(filename);
+		if (out.is_open())
+		{
+			out << export_public_pem(pub);
+		}
+	}
+
+	void export_prv_to_file(const rsa_priv& prv, const std::string& filename)
+	{
+		std::ofstream out(filename);
+		if (out.is_open())
+		{
+			out << export_private_pem(prv);
+		}
+	}
+}
+
+namespace key_import
+{
+	struct reader {
+		const std::vector<std::uint8_t>& v; std::size_t pos{ 0 };
+		std::uint8_t u8() { return v[pos++]; }
+		std::vector<std::uint8_t> take(std::size_t n)
+		{
+			auto b = v.begin() + pos, e = b + n; pos += n; return { b,e };
+		}
+		std::size_t len() { return v.size() - pos; }
+	};
+
+	std::vector<std::uint8_t> base64_pem_body(const std::string& pem)
+	{
+		auto beg = pem.find('\n');
+		auto end = pem.rfind("-----END");
+		std::string b64 = pem.substr(beg + 1, end - beg - 1);
+		b64.erase(std::remove_if(b64.begin(), b64.end(), isspace), b64.end());
+		std::string bin = base64::from_base64(b64);
+		return { bin.begin(), bin.end() };
+	}
+
+	std::size_t der_len(reader& R)
+	{
+		std::size_t len = R.u8();
+		if ((len & 0x80) == 0) return len;
+		std::size_t octets = len & 0x7F;  len = 0;
+		while (octets--) len = (len << 8) | R.u8();
+		return len;
+	}
+
+	big_int der_integer(reader& R)
+	{
+		if (R.u8() != 0x02) throw std::runtime_error("ASN.1: expected INTEGER");
+		std::size_t L = der_len(R);
+		auto bytes = R.take(L);
+		while (bytes.size() && bytes[0] == 0) bytes.erase(bytes.begin());
+		std::reverse(bytes.begin(), bytes.end());
+		return rsa::bytes_to_bigint(bytes);
+	}
+
+	// PKCS #1
+	rsa_pub import_public_pem(const std::string& pem)
+	{
+		auto der = base64_pem_body(pem);
+		reader R{ der };
+
+		if (R.u8() != 0x30) throw std::runtime_error("ASN.1: expected SEQUENCE");
+		der_len(R);
+
+		big_int n = der_integer(R);
+		big_int e = der_integer(R);
+
+		rsa_pub pub{ n, e };
+		pub.ctx = barrett::make_ctx(pub.n);
+		return pub;
+	}
+
+	// PKCS #1
+	rsa_priv import_private_pem(const std::string& pem)
+	{
+		auto der = base64_pem_body(pem);
+		reader R{ der };
+
+		if (R.u8() != 0x30) throw std::runtime_error("ASN.1: expected SEQUENCE");
+		der_len(R);
+
+		big_int version = der_integer(R);
+		big_int n = der_integer(R);
+		big_int e = der_integer(R);
+		big_int d = der_integer(R);
+		big_int p = der_integer(R);
+		big_int q = der_integer(R);
+
+		rsa_priv prv{ n, d, p, q };
+		prv.ctx = barrett::make_ctx(prv.n);
+		return prv;
+	}
+
+	rsa_pub import_pub_from_file(const std::string& filename)
+	{
+		std::ifstream in(filename);
+		if (in.is_open())
+		{
+			std::stringstream buffer;
+			buffer << in.rdbuf();
+			return import_public_pem(buffer.str());
+		}
+		std::cout << "No pem: " << filename << " found\n";
+		return rsa_pub{};
+	}
+
+	rsa_priv import_prv_from_file(const std::string& filename)
+	{
+		std::ifstream in(filename);
+		if (in.is_open())
+		{
+			std::stringstream buffer;
+			buffer << in.rdbuf();
+			return import_private_pem(buffer.str());
+		}
+		std::cout << "No pem: " << filename << " found\n";
+		return rsa_priv{};
+	}
+
+	bool verify_keypair(const rsa_pub& pub, const rsa_priv& prv)
+	{
+		if (pub.n != prv.n) return false;
+
+		big_int phi = (prv.p - 1) * (prv.q - 1);
+		big_int ed = barrett::f_powmod(pub.e, big_int(1), prv.ctx);
+
+		ed = (pub.e * prv.d) % phi;
+		return ed == big_int(1);
 	}
 }
