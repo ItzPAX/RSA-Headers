@@ -12,8 +12,8 @@ While the key size may be large, this implementation lacks multiple critical pro
 - [x] PSS RSA signing
 - [x] Key export and import
 - [x] Key pair verification
-- [ ] RSA blinding on all private key operations
-- [ ] fast randomized Miller-Rabin rounds
+- [x] RSA blinding on all private key operations
+- [x] fast randomized Miller-Rabin rounds
 - [ ] Montgomery multiplication
 
 ## Requirements
