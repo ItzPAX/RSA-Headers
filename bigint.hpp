@@ -7,8 +7,11 @@
 class big_int
 {
 public:
-    std::vector<std::uint8_t> _value;   // little-endian: _value[0] = least-significant byte
-    std::size_t               _bit_len; // total number of useful bits
+    using limb_t = std::uint32_t;
+    using dlimb_t = std::uint64_t;
+
+    std::vector<limb_t> _v;
+    std::size_t         _bit_len = 0;
 
 public:
     // O(N^2) IMPROVE IMPROVE IMPROVE
@@ -42,10 +45,10 @@ public:
         if (a._bit_len != b._bit_len)
             return a._bit_len > b._bit_len ? 1 : -1;
 
-        std::size_t n = (a._bit_len + 7) >> 3;
+        std::size_t n = a._v.size();
         for (std::size_t i = 0; i < n; ++i) {
-            std::uint8_t ai = a._value[n - 1 - i];
-            std::uint8_t bi = b._value[n - 1 - i];
+            limb_t ai = a._v[n - 1 - i];
+            limb_t bi = b._v[n - 1 - i];
             if (ai != bi) return ai > bi ? 1 : -1;
         }
         return 0;
@@ -61,49 +64,51 @@ public:
 
     void shl1()
     {
-        if (_value.empty())
-            _value.push_back(0);
+        if (_v.empty())
+            _v.push_back(0);
 
-        std::uint16_t carry = 0;
-        for (std::size_t i = 0; i < _value.size(); ++i) {
-            std::uint16_t cur = static_cast<std::uint16_t>(_value[i]) << 1 | carry;
-            _value[i] = static_cast<std::uint8_t>(cur & 0xFF);
-            carry = cur >> 8;
+        limb_t carry = 0;
+        for (std::size_t i = 0; i < _v.size(); ++i) {
+            limb_t new_carry = _v[i] >> 31;
+            _v[i] = (_v[i] << 1) | carry;
+            carry = new_carry;
         }
-        if (carry) _value.push_back(static_cast<std::uint8_t>(carry));
+        if (carry) _v.push_back(carry);
         ++_bit_len;
     }
 
     void shr1()
     {
-        if (_bit_len == 0) return;
-
-        std::uint8_t carry = 0;
-        for (std::size_t i = _value.size(); i-- > 0; ) {
-            std::uint8_t cur = _value[i];
-            std::uint8_t nextC = cur & 1u;
-            _value[i] = (cur >> 1) | (carry << 7);
-            carry = nextC;
+        if (_v.empty()) return;
+        limb_t carry = 0;
+        for (std::size_t i = _v.size(); i-- > 0;) {
+            limb_t new_carry = _v[i] & 1;
+            _v[i] = (_v[i] >> 1) | (carry << 31);
+            carry = new_carry;
         }
-        trim();                         // updates _bit_len and pops MS zeros
+        trim();
     }
 
     bool is_odd() const
     {
-        return _bit_len && (_value[0] & 1u);
+        return _bit_len && (_v[0] & 1u);
+    }
+
+    bool is_zero() const
+    {
+        return _bit_len == 0;
+    }
+
+    bool bit(std::size_t i) const
+    {
+        return (i < _bit_len) && ((_v[i >> 5] >> (i & 31)) & 1u);
     }
 
     void trim()
     {
-        while (!_value.empty() && _value.back() == 0)
-            _value.pop_back();
-
-        if (_value.empty()) {
-            _bit_len = 0;
-            return;
-        }
-        _bit_len = (_value.size() - 1) * 8 +
-            std::bit_width(_value.back());
+        while (!_v.empty() && _v.back() == 0) _v.pop_back();
+        _bit_len = _v.empty() ? 0
+            : (_v.size() - 1) * 32 + (32 - std::countl_zero(_v.back()));
     }
 
 public:
@@ -113,31 +118,31 @@ public:
 
     }
 
-    big_int(std::vector<uint8_t> _, size_t bits)
-        : _bit_len(bits)
+    big_int(std::vector<limb_t> _)
     {
-        _value.resize(_.size() * sizeof(uint8_t));
-        memcpy(_value.data(), _.data(), _.size() * sizeof(uint8_t));
+        _bit_len = _.empty() ? 0 :
+            (_.size() - 1) * sizeof(limb_t) +
+            std::bit_width(_.back());
+
+        _v.resize(_.size());
+        memcpy(_v.data(), _.data(), _.size() * sizeof(limb_t));
     }
 
     big_int(int dec)
     {
         if (dec < 0)
-            throw std::invalid_argument("BigInt(int): negative value not supported");
+            throw std::invalid_argument("big_int(int): negative value not supported");
 
-        if (dec == 0) {                 // the canonical zero
+        if (dec == 0) {
             _bit_len = 0;
             return;
         }
 
-        std::uint32_t v = static_cast<std::uint32_t>(dec);  // promote to unsigned
-        while (v) {
-            _value.push_back(static_cast<std::uint8_t>(v & 0xFF)); // LSB first
-            v >>= 8;
-        }
+        limb_t v = static_cast<limb_t>(dec);
+        _v.push_back(v);
 
-        _bit_len = (_value.size() - 1) * 8 +
-            std::bit_width(_value.back());
+        _bit_len = (_v.size() - 1) * 32 +
+            std::bit_width(_v.back());
     }
 
     big_int(std::string dec)
@@ -145,12 +150,14 @@ public:
     {
         std::string bin = dec_to_bin(dec);
         _bit_len = bin.size();
-        _value.assign((_bit_len + 7) / 8, 0);
+
+        _v.assign((_bit_len + 31) / 32, 0);
 
         std::size_t bit_pos = 0;
         for (auto it = bin.rbegin(); it != bin.rend(); ++it, ++bit_pos)
             if (*it == '1')
-                _value[bit_pos >> 3] |= 1u << (bit_pos & 7);
+                _v[bit_pos >> 5]
+                |= static_cast<limb_t>(1u) << (bit_pos & 31);
     }
 
 public:
@@ -159,47 +166,42 @@ public:
         if (_bit_len == 0) return "0";
 
         std::string raw;
+        raw.reserve(_bit_len);
 
-        std::size_t full_bytes = _bit_len >> 3;
-        std::size_t extra_bits = _bit_len & 7;
+        std::size_t full_limbs = _bit_len >> 5;
+        std::size_t extra_bits = _bit_len & 31;
 
         if (extra_bits) {
-            std::uint8_t msb = _value[full_bytes];
+            limb_t limb = _v[full_limbs];
             for (int b = static_cast<int>(extra_bits) - 1; b >= 0; --b)
-                raw.push_back((msb & (1u << b)) ? '1' : '0');
+                raw.push_back((limb & (1u << b)) ? '1' : '0');
         }
 
-        for (std::size_t i = 0; i < full_bytes; ++i) {
-            std::uint8_t byte = _value[full_bytes - 1 - i];
-            for (int b = 7; b >= 0; --b)
-                raw.push_back((byte & (1u << b)) ? '1' : '0');
+        for (std::size_t i = 0; i < full_limbs; ++i) {
+            limb_t limb = _v[full_limbs - 1 - i];
+            for (int b = 31; b >= 0; --b)
+                raw.push_back((limb & (1u << b)) ? '1' : '0');
         }
 
-        std::size_t first_group = raw.size() % 4;
-        if (first_group == 0) first_group = 4;
-
+        std::size_t pad = (4 - (raw.size() % 4)) & 3;
         std::string out;
-        out.reserve(raw.size() + raw.size() / 4 + raw.size() % 4);
+        out.reserve(raw.size() + raw.size() / 4 + pad);
 
-        int pad = 4 - raw.size() % 4 == 4 ? 0 : 4 - raw.size() % 4;
-        for (int i = 0; i < pad; i++)
-        {
-            out.push_back('0');
-        }
+        out.append(pad, '0');
 
-        std::size_t count = 0;
+        std::size_t nibble_cnt = pad;
         for (char c : raw) {
-            if (count == first_group) {
+            if (nibble_cnt == 4) {
                 out.push_back(' ');
-                count = 0;
-                first_group = 4;
+                nibble_cnt = 0;
             }
             out.push_back(c);
-            ++count;
+            ++nibble_cnt;
         }
 
         return out;
     }
+
 
 public:
     big_int powmod(big_int exp, const big_int& mod)
@@ -223,32 +225,27 @@ public:
 
     big_int operator+(const big_int& rhs) const
     {
-        const std::size_t len_a = (_bit_len + 7) >> 3;
-        const std::size_t len_b = (rhs._bit_len + 7) >> 3;
-        const std::size_t max_len = std::max(len_a, len_b);
+        const std::size_t la = _v.size();
+        const std::size_t lb = rhs._v.size();
+        const std::size_t n = std::max(la, lb);
 
-        std::vector<std::uint8_t> sum;
-        sum.reserve(max_len + 1);
+        std::vector<limb_t> sum;
+        sum.resize(n);
 
-        std::uint16_t carry = 0;
+        dlimb_t carry = 0;
+        for (std::size_t i = 0; i < n; ++i) {
+            dlimb_t a = (i < la) ? _v[i] : 0;
+            dlimb_t b = (i < lb) ? rhs._v[i] : 0;
 
-        for (std::size_t i = 0; i < max_len; ++i)
-        {
-            std::uint16_t a = (i < len_a) ? _value[i] : 0;
-            std::uint16_t b = (i < len_b) ? rhs._value[i] : 0;
-            std::uint16_t s = a + b + carry;
-
-            sum.push_back(static_cast<std::uint8_t>(s));
-
-            carry = s >> 8;
+            dlimb_t t = a + b + carry;
+            sum[i] = static_cast<limb_t>(t);
+            carry = t >> 32;
         }
-        if (carry) sum.push_back(static_cast<std::uint8_t>(carry));
+        if (carry) sum.push_back(static_cast<limb_t>(carry));
 
-        std::size_t bit_len = sum.empty() ? 0 :
-            (sum.size() - 1) * 8 +
-            std::bit_width(sum.back());
-
-        return big_int(std::move(sum), bit_len);
+        big_int s(sum);
+        s.trim();
+        return s;
     }
 
     big_int operator-(const big_int& rhs) const
@@ -256,76 +253,38 @@ public:
         if (compare(*this, rhs) < 0)
             throw std::invalid_argument("big_int::operator- : negative result");
 
-        const std::size_t len_a = (_bit_len + 7) >> 3;
-        const std::size_t len_b = (rhs._bit_len + 7) >> 3;
+        big_int diff; diff._v.resize(_v.size());
+        limb_t borrow = 0;
 
-        std::vector<std::uint8_t> diff;
-        diff.reserve(len_a);
+        for (std::size_t i = 0; i < _v.size(); ++i) {
+            limb_t a = _v[i];
+            limb_t b = (i < rhs._v.size()) ? rhs._v[i] : 0;
 
-        int borrow = 0;
-        for (std::size_t i = 0; i < len_a; ++i) {
-            int a = _value[i];
-            int b = (i < len_b) ? rhs._value[i] : 0;
-
-            int d = a - b - borrow;
-            if (d < 0) { d += 256; borrow = 1; }
-            else { borrow = 0; }
-
-            diff.push_back(static_cast<std::uint8_t>(d));
+            limb_t d = a - b - borrow;
+            borrow = (borrow ? a <= b : a < b);
+            diff._v[i] = d;
         }
-
-        while (!diff.empty() && diff.back() == 0)
-            diff.pop_back();
-
-        std::size_t bit_len = 0;
-        if (!diff.empty())
-            bit_len = (diff.size() - 1) * 8 +
-            std::bit_width(diff.back());
-
-        return big_int(std::move(diff), bit_len);
+        diff.trim();
+        return diff;
     }
 
     // O(n^2) OPTIMIZE ME
     big_int operator*(const big_int& rhs) const
     {
-        if (_bit_len == 0 || rhs._bit_len == 0)
-            return big_int();
+        std::size_t la = _v.size(), lb = rhs._v.size();
+        std::vector<limb_t> prod(la + lb, 0);
 
-        const std::size_t len_a = (_bit_len + 7) >> 3;
-        const std::size_t len_b = (rhs._bit_len + 7) >> 3;
-
-        std::vector<std::uint8_t> prod(len_a + len_b, 0);
-
-        for (std::size_t i = 0; i < len_a; ++i) {
-            std::uint16_t carry = 0;
-            for (std::size_t j = 0; j < len_b; ++j) {
-                std::uint32_t cur =
-                    prod[i + j] +
-                    static_cast<std::uint32_t>(_value[i]) *
-                    static_cast<std::uint32_t>(rhs._value[j]) +
-                    carry;
-
-                prod[i + j] = static_cast<std::uint8_t>(cur & 0xFF);
-                carry = cur >> 8;
+        for (std::size_t i = 0; i < la; ++i) {
+            dlimb_t carry = 0;
+            for (std::size_t j = 0; j < lb; ++j) {
+                dlimb_t cur = prod[i + j] +
+                    static_cast<dlimb_t>(_v[i]) * rhs._v[j] + carry;
+                prod[i + j] = static_cast<limb_t>(cur);
+                carry = cur >> 32;
             }
-            std::size_t k = i + len_b;
-            while (carry) {
-                std::uint32_t cur = prod[k] + carry;
-                prod[k] = static_cast<std::uint8_t>(cur & 0xFF);
-                carry = cur >> 8;
-                ++k;
-            }
+            prod[i + lb] += static_cast<limb_t>(carry);
         }
-
-        while (!prod.empty() && prod.back() == 0)
-            prod.pop_back();
-
-        std::size_t bit_len = 0;
-        if (!prod.empty())
-            bit_len = (prod.size() - 1) * 8 +
-            std::bit_width(prod.back());
-
-        return big_int(std::move(prod), bit_len);
+        big_int r; r._v = std::move(prod); r.trim(); return r;
     }
 
     big_int operator/(const big_int& rhs) const
@@ -339,20 +298,24 @@ public:
         big_int rem;
         big_int quo;
 
+        quo._bit_len = 0;
+
         for (std::size_t i = _bit_len; i-- > 0; )
         {
             rem.shl1();
-            std::uint8_t cur = _value[i >> 3];
-            if ((cur >> (i & 7)) & 1)
-                rem._value[0] |= 1;
+
+            std::size_t limb_idx = i >> 5;
+            std::size_t bit_idx = i & 31;
+            if ((_v[limb_idx] >> bit_idx) & 1u)
+                rem._v[0] |= 1u;
             rem.trim();
 
             quo.shl1();
 
-            if (compare(rem, rhs) >= 0) {             
+            if (compare(rem, rhs) >= 0) {
                 rem = rem - rhs;
                 rem.trim();
-                quo._value[0] |= 1;
+                quo._v[0] |= 1u;
             }
         }
 
@@ -366,16 +329,18 @@ public:
             throw std::invalid_argument("big_int::operator% : divide by zero");
 
         if (compare(*this, rhs) < 0)
-            return *this;                          // |dividend| < |divisor|
+            return *this;
 
-        big_int rem;                                // running remainder (0)
+        big_int rem;
 
         for (std::size_t i = _bit_len; i-- > 0; )
         {
             rem.shl1();
-            std::uint8_t cur_byte = _value[i >> 3];
-            if ((cur_byte >> (i & 7)) & 1)
-                rem._value[0] |= 1;
+
+            std::size_t limb_idx = i >> 5;
+            std::size_t bit_idx = i & 31;
+            if ((_v[limb_idx] >> bit_idx) & 1u)
+                rem._v[0] |= 1u;
             rem.trim();
 
             if (compare(rem, rhs) >= 0) {
@@ -383,9 +348,161 @@ public:
                 rem.trim();
             }
         }
+
         return rem;
     }
+
+    big_int operator>>(std::size_t k) const
+    {
+        if (k == 0)               return *this;
+        if (k >= _bit_len)        return big_int();
+
+        std::size_t limb_shift = k >> 5;
+        std::size_t bit_shift = k & 31;
+
+        big_int r;
+        std::size_t new_limbs = _v.size() - limb_shift;
+        r._v.resize(new_limbs);
+
+        if (bit_shift == 0) {
+            for (std::size_t i = 0; i < new_limbs; ++i)
+                r._v[i] = _v[i + limb_shift];
+        }
+        else {
+            const std::size_t inv = 32 - bit_shift;
+            for (std::size_t i = 0; i < new_limbs; ++i) {
+                std::uint32_t low = _v[i + limb_shift] >> bit_shift;
+                std::uint32_t high = (i + limb_shift + 1 < _v.size())
+                    ? _v[i + limb_shift + 1] << inv
+                    : 0;
+                r._v[i] = low | high;
+            }
+        }
+
+        r.trim();
+        return r;
+    }
+
+    big_int operator<<(std::size_t k) const
+    {
+        if (k == 0 || _bit_len == 0) return *this;
+
+        std::size_t limb_shift = k >> 5;
+        std::size_t bit_shift = k & 31;
+
+        big_int r;
+        r._v.assign(_v.size() + limb_shift + 1, 0);
+
+        if (bit_shift == 0) {
+            for (std::size_t i = 0; i < _v.size(); ++i)
+                r._v[i + limb_shift] = _v[i];
+        }
+        else {
+            const std::size_t inv = 32 - bit_shift;
+            std::uint32_t carry = 0;
+            for (std::size_t i = 0; i < _v.size(); ++i) {
+                std::uint32_t cur = _v[i];
+                r._v[i + limb_shift] = (cur << bit_shift) | carry;
+                carry = cur >> inv;
+            }
+            r._v[_v.size() + limb_shift] = carry;
+        }
+
+        r._bit_len = _bit_len + k;
+        r.trim();
+        return r;
+    }
 };
+
+namespace barrett
+{
+    struct barrett_ctx
+    {
+        big_int n;
+        big_int mu;
+        std::size_t k;
+    };
+
+    barrett_ctx make_ctx(const big_int& n)
+    {
+        barrett_ctx c{ n };
+        c.k = n._v.size();
+
+        big_int b2k;
+        b2k._v.assign(c.k * 2 + 1, 0);
+        b2k._v.back() = 1;
+        b2k._bit_len = (c.k * 2 + 1) * 32;
+
+        c.mu = b2k / n;
+        return c;
+    }
+
+    inline big_int barrett_red(big_int x, const barrett_ctx& c)
+    {
+        if (x < c.n) return x;
+
+        if (c.k == 0) return x % c.n;
+
+        const std::size_t shift1 = 32 * (c.k - 1);
+        const std::size_t shift2 = 32 * (c.k + 1);
+
+        big_int q1 = x >> shift1;
+        big_int q2 = q1 * c.mu;
+        big_int q3 = q2 >> shift2;
+
+        big_int r = x - q3 * c.n;
+        while (r >= c.n) r = r - c.n;      
+
+        return r;
+    }
+
+    big_int f_powmod(big_int base,
+        const big_int& exp,
+        const barrett_ctx& ctx)
+    {
+        const int W = 4;
+        const int TABLE = 1 << (W - 1);
+
+        base = barrett_red(base, ctx);
+        big_int one(1);
+
+        big_int table[TABLE];
+        table[0] = base;                        
+        big_int base2 = barrett_red(base * base, ctx);
+        for (int i = 1; i < TABLE; ++i)
+            table[i] = barrett_red(table[i - 1] * base2, ctx);
+
+        big_int acc = one;
+        std::size_t bitpos = exp._bit_len;
+
+        while (bitpos)
+        {
+            if (!exp.bit(bitpos - 1)) {
+                acc = barrett_red(acc * acc, ctx);
+                --bitpos;
+                continue;
+            }
+
+            std::size_t width = std::min<std::size_t>(W, bitpos);
+            std::size_t val = 0;
+            for (std::size_t i = 0; i < width; ++i)
+                val = (val << 1) | exp.bit(bitpos - 1 - i);
+
+            while ((val & 1) == 0) {
+                val >>= 1;
+                --width;
+            }
+
+            for (std::size_t i = 0; i < width; ++i)
+                acc = barrett_red(acc * acc, ctx);
+
+            acc = barrett_red(acc * table[(val - 1) >> 1], ctx);
+
+            bitpos -= width;
+        }
+        return acc;
+    }
+}
 
 namespace big_int_tests
 {
@@ -420,7 +537,6 @@ namespace big_int_tests
         big_int t_n("21626");
         big_int t_e("252");
         big_int t_msg("5113");
-
         std::cout << "Result: " << t_msg.powmod(t_e, t_n).as_string() << " (expected: 0100 1001 1100 1011)\n\n";
 
         std::cout << "Testing using powmod with big numbers...\n";
@@ -433,7 +549,14 @@ namespace big_int_tests
         std::cout << "n bits : " << n._bit_len << '\n';
         std::cout << "e bits : " << e._bit_len << '\n';
         std::cout << "m bits : " << m._bit_len << '\n';
-        std::cout << "Powmod (m^e mod n) bit length: " << m.powmod(e, n)._bit_len;
+        std::cout << "Powmod (m^e mod n) bit length: " << m.powmod(e, n)._bit_len << "\n\n";
+
+        std::cout << "Testing right shift (>>) of 128 >> 4...\n";
+        big_int sh1("128");
+        std::cout << "sh1: " << sh1.as_string() << " result: " << (sh1 >> 4).as_string() << "\n\n";
+
+        std::cout << "Testing left shift (<<) of 128 << 12...\n";
+        std::cout << "sh1: " << sh1.as_string() << " result: " << (sh1 << 12).as_string() << "\n\n";
 
         return true;
     }
