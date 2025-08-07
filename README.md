@@ -1,5 +1,5 @@
 # RSA-Headers
-A (triple) header only way to implement basic RSA features in your personal projects
+A (triple) header only way to implement RSA-OAEP and RSA-PSS functionality
 
 ## Disclaimer
 Do **NOT** use this in production environments
