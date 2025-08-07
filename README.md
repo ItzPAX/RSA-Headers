@@ -1,5 +1,5 @@
-# faursal
-Finally a usable RSA library - a (triple) header only way to implement basic RSA features in your personal projects
+# RSA-Headers
+A (triple) header only way to implement basic RSA features in your personal projects
 
 ## Disclaimer
 Do **NOT** use this in production environments
