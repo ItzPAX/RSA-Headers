@@ -2,6 +2,180 @@
 #include <random>
 #include "bigint.hpp"
 
+// https://github.com/czkz/base64/blob/master/base64.h
+namespace base64 
+{
+	[[nodiscard]] inline std::string to_base64(std::string_view data);
+	[[nodiscard]] inline std::string to_base64(const void* data, size_t size_bytes);
+
+	[[nodiscard]] inline std::string from_base64(std::string_view data);
+	[[nodiscard]] inline std::string from_base64(const void* data, size_t size_bytes);
+
+	inline void from_base64_inplace(std::string& data);
+	inline size_t from_base64_inplace(void* data, size_t size_bytes);
+
+	static constexpr uint8_t base64_lut[256][7] = {
+		"\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff",
+		"\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff",
+		"\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff",
+		"\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff",
+		"\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff",
+		"\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff",
+		"\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff",
+		"\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff",
+		"\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff",
+		"\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff",
+		"\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff", "\xf8\x03\xe0\x0f\x80\x3e",
+		"\xff\xff\xff\xff\xff\xff", "\xf8\x03\xe0\x0f\x80\x3e", "\xff\xff\xff\xff\xff\xff", "\xfc\x03\xf0\x0f\xc0\x3f",
+		"\xd0\x03\x40\x0d\x00\x34", "\xd4\x03\x50\x0d\x40\x35", "\xd8\x03\x60\x0d\x80\x36", "\xdc\x03\x70\x0d\xc0\x37",
+		"\xe0\x03\x80\x0e\x00\x38", "\xe4\x03\x90\x0e\x40\x39", "\xe8\x03\xa0\x0e\x80\x3a", "\xec\x03\xb0\x0e\xc0\x3b",
+		"\xf0\x03\xc0\x0f\x00\x3c", "\xf4\x03\xd0\x0f\x40\x3d", "\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff",
+		"\xff\xff\xff\xff\xff\xff", "\x00\x00\x00\x00\x00\x00", "\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff",
+		"\xff\xff\xff\xff\xff\xff", "\x00\x00\x00\x00\x00\x00", "\x04\x00\x10\x00\x40\x01", "\x08\x00\x20\x00\x80\x02",
+		"\x0c\x00\x30\x00\xc0\x03", "\x10\x00\x40\x01\x00\x04", "\x14\x00\x50\x01\x40\x05", "\x18\x00\x60\x01\x80\x06",
+		"\x1c\x00\x70\x01\xc0\x07", "\x20\x00\x80\x02\x00\x08", "\x24\x00\x90\x02\x40\x09", "\x28\x00\xa0\x02\x80\x0a",
+		"\x2c\x00\xb0\x02\xc0\x0b", "\x30\x00\xc0\x03\x00\x0c", "\x34\x00\xd0\x03\x40\x0d", "\x38\x00\xe0\x03\x80\x0e",
+		"\x3c\x00\xf0\x03\xc0\x0f", "\x40\x01\x00\x04\x00\x10", "\x44\x01\x10\x04\x40\x11", "\x48\x01\x20\x04\x80\x12",
+		"\x4c\x01\x30\x04\xc0\x13", "\x50\x01\x40\x05\x00\x14", "\x54\x01\x50\x05\x40\x15", "\x58\x01\x60\x05\x80\x16",
+		"\x5c\x01\x70\x05\xc0\x17", "\x60\x01\x80\x06\x00\x18", "\x64\x01\x90\x06\x40\x19", "\xff\xff\xff\xff\xff\xff",
+		"\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff", "\xfc\x03\xf0\x0f\xc0\x3f",
+		"\xff\xff\xff\xff\xff\xff", "\x68\x01\xa0\x06\x80\x1a", "\x6c\x01\xb0\x06\xc0\x1b", "\x70\x01\xc0\x07\x00\x1c",
+		"\x74\x01\xd0\x07\x40\x1d", "\x78\x01\xe0\x07\x80\x1e", "\x7c\x01\xf0\x07\xc0\x1f", "\x80\x02\x00\x08\x00\x20",
+		"\x84\x02\x10\x08\x40\x21", "\x88\x02\x20\x08\x80\x22", "\x8c\x02\x30\x08\xc0\x23", "\x90\x02\x40\x09\x00\x24",
+		"\x94\x02\x50\x09\x40\x25", "\x98\x02\x60\x09\x80\x26", "\x9c\x02\x70\x09\xc0\x27", "\xa0\x02\x80\x0a\x00\x28",
+		"\xa4\x02\x90\x0a\x40\x29", "\xa8\x02\xa0\x0a\x80\x2a", "\xac\x02\xb0\x0a\xc0\x2b", "\xb0\x02\xc0\x0b\x00\x2c",
+		"\xb4\x02\xd0\x0b\x40\x2d", "\xb8\x02\xe0\x0b\x80\x2e", "\xbc\x02\xf0\x0b\xc0\x2f", "\xc0\x03\x00\x0c\x00\x30",
+		"\xc4\x03\x10\x0c\x40\x31", "\xc8\x03\x20\x0c\x80\x32", "\xcc\x03\x30\x0c\xc0\x33", "\xff\xff\xff\xff\xff\xff",
+		"\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff",
+		"\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff",
+		"\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff",
+		"\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff",
+		"\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff",
+		"\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff",
+		"\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff",
+		"\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff",
+		"\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff",
+		"\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff",
+		"\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff",
+		"\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff",
+		"\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff",
+		"\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff",
+		"\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff",
+		"\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff",
+		"\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff",
+		"\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff",
+		"\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff",
+		"\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff",
+		"\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff",
+		"\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff",
+		"\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff",
+		"\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff",
+		"\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff",
+		"\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff",
+		"\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff",
+		"\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff",
+		"\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff",
+		"\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff",
+		"\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff",
+		"\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff",
+		"\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff", "\xff\xff\xff\xff\xff\xff",
+	};
+
+	[[nodiscard]] inline std::string to_base64(std::string_view data) {
+		constexpr std::string_view a = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+		const std::basic_string_view<uint8_t> s{ reinterpret_cast<const uint8_t*>(data.data()), data.size() };
+		std::string ret;
+		const size_t origLen = s.size();
+		const size_t newLen = (origLen / 3 + (origLen % 3 != 0)) * 4;
+		ret.resize(newLen, '=');
+		char* out = ret.data();
+
+		size_t i; // Signed because (origLen - 2) can underflow
+		for (i = 0; i < origLen - 2; i += 3) {
+			out[i / 3 * 4 + 0] = a[(s[i] & 0b11111100) >> 2];
+			out[i / 3 * 4 + 1] = a[(s[i + 0] & 0b00000011) << 4 | (s[i + 1] & 0b11110000) >> 4];
+			out[i / 3 * 4 + 2] = a[(s[i + 1] & 0b00001111) << 2 | (s[i + 2] & 0b11000000) >> 6];
+			out[i / 3 * 4 + 3] = a[(s[i + 2] & 0b00111111)];
+		}
+		switch (origLen % 3) {
+		case 2:
+			out[i / 3 * 4 + 0] = a[(s[i] & 0b11111100) >> 2];
+			out[i / 3 * 4 + 1] = a[(s[i + 0] & 0b00000011) << 4 | (s[i + 1] & 0b11110000) >> 4];
+			out[i / 3 * 4 + 2] = a[(s[i + 1] & 0b00001111) << 2 | (s[i + 2] & 0b11000000) >> 6];
+			break;
+		case 1:
+			out[i / 3 * 4 + 0] = a[(s[i] & 0b11111100) >> 2];
+			out[i / 3 * 4 + 1] = a[(s[i + 0] & 0b00000011) << 4 | (s[i + 1] & 0b11110000) >> 4];
+			break;
+		}
+		return ret;
+	}
+
+
+	[[nodiscard]] inline std::string to_base64(const void* data, size_t size_bytes) {
+		return to_base64({ reinterpret_cast<const char*>(data), size_bytes });
+	}
+
+
+	/// dstLen must be at least (3/4 * srcLen), even if there's less data encoded
+	/// dst may be equal to src
+	inline size_t from_base64(const void* src, size_t srcLen, void* dst, size_t dstLen) {
+		std::basic_string_view<uint8_t> data{ reinterpret_cast<const uint8_t*>(src), srcLen };
+		const size_t origLen = data.size();
+		if (origLen == 0) {
+			return 0;
+		}
+		if (origLen % 4 != 0) {
+			return 0;
+		}
+		const size_t newLen = origLen / 4 * 3;
+		if (dstLen < newLen) {
+			return 0;
+		}
+
+		size_t outLen = newLen;
+		uint8_t* out = reinterpret_cast<uint8_t*>(dst);
+
+		for (size_t i = 0; i < origLen; i += 4) {
+			out[i / 4 * 3 + 0] = base64_lut[data[i + 0]][0] | base64_lut[data[i + 1]][1];
+			out[i / 4 * 3 + 1] = base64_lut[data[i + 1]][2] | base64_lut[data[i + 2]][3];
+			out[i / 4 * 3 + 2] = base64_lut[data[i + 2]][4] | base64_lut[data[i + 3]][5];
+		}
+		// Min possible data.size() is 4, so rbegin() + 3 <= rend()
+		// Min outLen is 3, so outLen-- will never underflow
+		for (auto it = data.rbegin(); it != data.rbegin() + 3; ++it) {
+			if (*it == '=') {
+				outLen--;
+			}
+			else {
+				break;
+			}
+		}
+		return outLen;
+	}
+
+	inline size_t from_base64_inplace(void* data, size_t size_bytes) {
+		return from_base64(data, size_bytes, data, size_bytes);
+	}
+
+	inline void from_base64_inplace(std::string& data) {
+		auto newLen = from_base64(data.data(), data.size(), data.data(), data.size());
+		data.resize(newLen);
+	}
+
+	[[nodiscard]] inline std::string from_base64(const void* data, size_t size_bytes) {
+		std::string ret;
+		ret.resize(size_bytes / 4 * 3);
+		auto newLen = from_base64(data, size_bytes, ret.data(), ret.size());
+		ret.resize(newLen);
+		return ret;
+	}
+
+	[[nodiscard]] inline std::string from_base64(std::string_view data) {
+		return from_base64(data.data(), data.size());
+	}
+}
+
 static const int MR_BASE[12] = { 2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37 };
 
 enum KEY_LENGTH
@@ -23,6 +197,7 @@ struct rsa_priv
 {
 	big_int n; // prime factor
 	big_int d; // inverse of e
+	big_int p, q; // prime factors
 	barrett::barrett_ctx ctx;
 };
 
@@ -32,12 +207,16 @@ class rsa
 {
 private:
 	KEY_LENGTH _kl;
-	rsa_pub pub;
-	rsa_priv priv;
-
 	std::uniform_int_distribution<std::uint64_t> u64;
-
 	int small_primes[512];
+
+public:
+	rsa(KEY_LENGTH kl)
+		: _kl(kl)
+	{
+		fill_small_primes();
+		u64 = std::uniform_int_distribution<std::uint64_t>(0, ~0ULL);
+	}
 
 private:
 	void fill_small_primes()
@@ -55,14 +234,6 @@ private:
 				small_primes[primes_found++] = i;
 			}
 		}
-	}
-
-public:
-	rsa(KEY_LENGTH kl)
-		: _kl(kl)
-	{
-		fill_small_primes();
-		u64 = std::uniform_int_distribution<std::uint64_t>(0, ~0ULL);
 	}
 
 	big_int gcd(big_int a, big_int b)
@@ -90,36 +261,6 @@ public:
 			tmp = old_t - q * t;  old_t = std::move(t);  t = std::move(tmp);
 		}
 		return { old_r, old_s, old_t };
-	}
-
-	big_int modinv(big_int a, big_int m)
-	{
-		a = a % m;
-		if (a == big_int(0) || m <= big_int(1))
-			throw std::invalid_argument("modinv: invalid input");
-
-		big_int t(0), new_t(1);
-		big_int r = m, new_r = a;
-
-		while (new_r._bit_len) {
-			big_int q = r / new_r;
-
-			big_int tmp = new_t * q;
-			while (t < tmp)
-				t = t + m;
-			tmp = t - tmp;
-			t = std::move(new_t);
-			new_t = tmp;
-
-			tmp = r - q * new_r;
-			r = std::move(new_r);
-			new_r = std::move(tmp);
-		}
-
-		if (r != big_int(1))
-			throw std::invalid_argument("modinv: numbers are not coprime");
-
-		return t;                            // already 0 … m-1
 	}
 
 	big_int choose_e(const big_int& phi)
@@ -215,6 +356,7 @@ public:
 		return r;
 	}
 
+public:
 	std::pair<rsa_pub, rsa_priv> generate_key_pair()
 	{
 		std::cout << "generating key pair, this might take some time...\n";
@@ -240,14 +382,95 @@ public:
 		big_int d = modinv(e, phi);
 
 		rsa_pub  pub{ n, e };
-		rsa_priv prv{ n, d };
+		rsa_priv prv{ n, d, p, q };
+		pub.ctx = barrett::make_ctx(n);
+		prv.ctx = barrett::make_ctx(n);
 
 		std::cout << "N: " << n.as_string() << "\nd: " << d.as_string() << "\ne: " << e.as_string() << "\n";
 
 		return { pub, prv };
 	}
 
-	big_int bytes_to_bigint(const std::vector<std::uint8_t>& bytes)
+	big_int rsa_encrypt(const big_int& m, const rsa_pub& pub)
+	{
+		if (m >= pub.n) throw std::invalid_argument("message too large");
+		return barrett::f_powmod(m, pub.e, pub.ctx);
+	}
+
+	big_int rsa_decrypt(const big_int& c, const rsa_priv& prv)
+	{
+		if (c >= prv.n) throw std::invalid_argument("cipher > modulus");
+		return barrett::f_powmod(c, prv.d, prv.ctx);
+	}
+
+	// returns a byte string not suitable for network traffic
+	std::string rsa_encrypt(const std::string& str, const rsa_pub& pub)
+	{
+		std::vector<std::uint8_t> bytes(str.begin(), str.end());
+		std::vector<std::uint8_t> encrypted;
+
+		std::size_t modulus_bytes = (pub.n._bit_len + 7) / 8;
+		std::size_t plain_bytes = (pub.n._bit_len - 1) / 8;
+
+		for (std::size_t off = 0; off < bytes.size(); off += plain_bytes)
+		{
+			std::size_t len = std::min(plain_bytes, bytes.size() - off);
+
+			std::vector<std::uint8_t> block(bytes.begin() + off,
+				bytes.begin() + off + len);
+
+			big_int m = bytes_to_bigint(block);
+			big_int c = rsa_encrypt(m, pub);
+
+			std::vector<std::uint8_t> out = bigint_to_bytes(c);
+			out.resize(modulus_bytes, 0);
+			encrypted.insert(encrypted.end(), out.begin(), out.end());
+		}
+
+		return std::string(encrypted.begin(), encrypted.end());
+	}
+
+	// can ONLY decrypt a byte string, to decrypt a base64 string call b64_decrypt
+	std::string rsa_decrypt(const std::string& str, const rsa_priv& prv)
+	{
+		std::vector<std::uint8_t> bytes(str.begin(), str.end());
+		std::vector<std::uint8_t> plain;
+
+		std::size_t modulus_bytes = (prv.n._bit_len + 7) / 8;
+		if (bytes.size() % modulus_bytes != 0)
+			throw std::invalid_argument("ciphertext length not a multiple of block size");
+
+		for (std::size_t off = 0; off < bytes.size(); off += modulus_bytes)
+		{
+			std::vector<std::uint8_t> block(bytes.begin() + off,
+				bytes.begin() + off + modulus_bytes);
+
+			big_int c = bytes_to_bigint(block);
+			big_int m = rsa_decrypt(c, prv);
+
+			std::vector<std::uint8_t> out = bigint_to_bytes(m);
+			plain.insert(plain.end(), out.begin(), out.end());
+		}
+
+		return std::string(plain.begin(), plain.end());
+	}
+
+	// returns a encrypted base64 string suitable for network traffic
+	std::string b64_encrypt(const std::string& str, const rsa_pub& pub)
+	{
+		std::string byte_string = rsa_encrypt(str, pub);
+		return base64::to_base64(byte_string);
+	}
+
+	// can ONLY decrypt base64 strings, use rsa_decrypt for byte strings
+	std::string b64_decrypt(const std::string& str, const rsa_priv& prv)
+	{
+		std::string byte_string = base64::from_base64(str);
+		return rsa_decrypt(byte_string, prv);
+	}
+
+public:
+	static big_int bytes_to_bigint(const std::vector<std::uint8_t>& bytes)
 	{
 		big_int x;
 		x._v.resize((bytes.size() + 3) / 4, 0);
@@ -257,7 +480,7 @@ public:
 		return x;
 	}
 
-	std::vector<std::uint8_t> bigint_to_bytes(big_int x)
+	static std::vector<std::uint8_t> bigint_to_bytes(big_int x)
 	{
 		std::vector<std::uint8_t> out;
 		out.reserve(x._v.size() * 4);
@@ -272,15 +495,101 @@ public:
 		return out;
 	}
 
-	big_int rsa_encrypt(const big_int& m, const rsa_pub& pub)
+	static big_int modinv(big_int a, big_int m)
 	{
-		if (m >= pub.n) throw std::invalid_argument("message too large");
-		return barrett::f_powmod(m, pub.e, pub.ctx);
-	}
+		a = a % m;
+		if (a == big_int(0) || m <= big_int(1))
+			throw std::invalid_argument("modinv: invalid input");
 
-	big_int rsa_decrypt(const big_int& c, const rsa_priv& prv)
-	{
-		if (c >= prv.n) throw std::invalid_argument("cipher > modulus");
-		return barrett::f_powmod(c, prv.d, prv.ctx);
+		big_int t(0), new_t(1);
+		big_int r = m, new_r = a;
+
+		while (new_r._bit_len) {
+			big_int q = r / new_r;
+
+			big_int tmp = new_t * q;
+			while (t < tmp)
+				t = t + m;
+			tmp = t - tmp;
+			t = std::move(new_t);
+			new_t = tmp;
+
+			tmp = r - q * new_r;
+			r = std::move(new_r);
+			new_r = std::move(tmp);
+		}
+
+		if (r != big_int(1))
+			throw std::invalid_argument("modinv: numbers are not coprime");
+
+		return t;                            // already 0 … m-1
 	}
 };
+
+namespace key_export
+{
+	std::string der_len(std::size_t L)
+	{
+		if (L < 128) return std::string(1, static_cast<char>(L));
+		std::string out;
+		while (L) { out.insert(out.begin(), static_cast<char>(L & 0xFF)); L >>= 8; }
+		out.insert(out.begin(), static_cast<char>(0x80 | out.size()));
+		return out;
+	}
+
+	std::string asn1_integer(const big_int& x)
+	{
+		std::vector<std::uint8_t> v = rsa::bigint_to_bytes(x);
+		if (v.empty()) v.push_back(0);
+		if (v.back() & 0x80) v.push_back(0);          // force positive
+		std::string s(v.rbegin(), v.rend());          // big-endian
+		return std::string(1, 0x02) + der_len(s.size()) + s;
+	}
+
+	std::string export_public_pem(const rsa_pub& pub)
+	{
+		std::string seq = asn1_integer(pub.n) + asn1_integer(pub.e);
+		std::string der = std::string(1, 0x30) + der_len(seq.size()) + seq;
+		std::string b64 = base64::to_base64(der);
+
+		/* 64-col line break */
+		for (std::size_t i = 64; i < b64.size(); i += 65) b64.insert(i, "\n");
+
+		return "-----BEGIN RSA PUBLIC KEY-----\n" + b64 +
+			"\n-----END RSA PUBLIC KEY-----\n";
+	}
+
+	std::string export_private_pem(const rsa_priv& prv)
+	{
+		big_int p = prv.p;
+		big_int q = prv.q;
+		big_int d = prv.d;
+		big_int n = prv.n;
+		big_int e = (prv.ctx.n == prv.n) ? prv.ctx.n : big_int(65537);
+
+		big_int dP = d % (p - 1);
+		big_int dQ = d % (q - 1);
+		big_int qInv = rsa::modinv(q, p);
+
+		std::string seq = asn1_integer(0) +
+			asn1_integer(n) +
+			asn1_integer(e) +
+			asn1_integer(d) +
+			asn1_integer(p) +
+			asn1_integer(q) +
+			asn1_integer(dP) +
+			asn1_integer(dQ) +
+			asn1_integer(qInv);
+
+		std::string der = std::string(1, 0x30) + der_len(seq.size()) + seq;
+
+		/* ---- 3. Base-64 with 64-column breaks --------------------------- */
+		std::string b64 = base64::to_base64(der);
+		for (std::size_t i = 64; i < b64.size(); i += 65) b64.insert(i, "\n");
+
+		/* ---- 4. wrap in PEM armor --------------------------------------- */
+		return "-----BEGIN RSA PRIVATE KEY-----\n" +
+			b64 +
+			"\n-----END RSA PRIVATE KEY-----\n";
+	}
+}
