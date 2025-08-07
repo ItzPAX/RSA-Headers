@@ -22,6 +22,7 @@ Just copy the three header files into your project and include "rsa.hpp" for exa
 
 ## Usage
 ### Creating a key pair
+The constructor parameter is the size of the key to be used, the current maximum is 4096 bits
 ```cpp
 #include "rsa.hpp"
 int main()
@@ -32,6 +33,7 @@ int main()
 }
 ```
 ### Encrypting / Decrypting a string
+Allows for encryption of strings of any length through splitting into chunks
 ```cpp
 #include "rsa.hpp"
 int main()
@@ -44,6 +46,7 @@ int main()
 }
 ```
 ### Signing and verifying a message
+Allows for signing and verification of messages of any length
 ```cpp
 #include "rsa.hpp"
 int main()
