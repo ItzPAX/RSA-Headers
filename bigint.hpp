@@ -134,9 +134,7 @@ public:
     big_int(std::vector<limb_t> _)
     {
         _bit_len = _.empty() ? 0 :
-            (_.size() - 1) * sizeof(limb_t) +
-            std::bit_width(_.back());
-
+            32 * (_.size() - 1) + std::bit_width(_.back());
         _v.resize(_.size());
         memcpy(_v.data(), _.data(), _.size() * sizeof(limb_t));
     }

@@ -184,47 +184,13 @@ namespace base64
 #include <sstream>
 
 #include "bigint.hpp"
-
-#include <windows.h>
-#include <bcrypt.h>
-#pragma comment(lib, "bcrypt.lib")
-
-namespace s_rng
-{
-	inline void secure_random_bytes(void* buf, std::size_t len)
-	{
-		if (BCryptGenRandom(nullptr,
-			static_cast<PUCHAR>(buf),
-			static_cast<ULONG>(len),
-			BCRYPT_USE_SYSTEM_PREFERRED_RNG) != 0)
-			throw std::system_error(GetLastError(),
-				std::system_category(),
-				"BCryptGenRandom failed");
-	}
-	class secure_rng
-	{
-	public:
-		using result_type = std::uint64_t;
-
-		static constexpr result_type _min() { return 0; }
-		static constexpr result_type _max() { return ~result_type(0); }
-
-		result_type operator()()
-		{
-			result_type r;
-			secure_random_bytes(&r, sizeof(r));
-			return r;
-		}
-	};
-}
+#include "oaeppss.hpp"
 
 static const int MR_BASE[12] = { 2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37 };
 
 enum KEY_LENGTH
 {
-	RSA32 = 32,    // for testing only
-	RSA256 = 256,   // Unsafe
-	RSA1024 = 1024, // Unsafe
+	RSA1024 = 1024, // Unsafe for testing only
 	RSA2048 = 2048, // Recommended for short lived signatures
 	RSA3072 = 3072, // Recommended for normal messages
 	RSA4096 = 4096, // For high security to 2030+ (!!!)KEY GENERATION CAN TAKE A FEW SECONDS(!!!)
@@ -241,6 +207,7 @@ struct rsa_priv
 {
 	big_int n; // prime factor
 	big_int d; // inverse of e
+	big_int e; // inverse of e
 	big_int p, q; // prime factors
 	barrett::barrett_ctx ctx;
 };
@@ -414,7 +381,7 @@ public:
 			p = random_k_bits(lp);
 		} while (!probably_prime(p));
 		do {
-			q = random_k_bits(lp);
+			q = random_k_bits(lq);
 		} while (!probably_prime(q));
 
 		big_int n = p * q;
@@ -425,7 +392,7 @@ public:
 		big_int d = modinv(e, phi);
 
 		rsa_pub  pub{ n, e };
-		rsa_priv prv{ n, d, p, q };
+		rsa_priv prv{ n, d, e, p, q };
 		pub.ctx = barrett::make_ctx(n);
 		prv.ctx = barrett::make_ctx(n);
 
@@ -444,58 +411,6 @@ public:
 		return barrett::f_powmod(c, prv.d, prv.ctx);
 	}
 
-	// returns a byte string not suitable for network traffic
-	std::string rsa_encrypt(const std::string& str, const rsa_pub& pub)
-	{
-		std::vector<std::uint8_t> bytes(str.begin(), str.end());
-		std::vector<std::uint8_t> encrypted;
-
-		std::size_t modulus_bytes = (pub.n._bit_len + 7) / 8;
-		std::size_t plain_bytes = (pub.n._bit_len - 1) / 8;
-
-		for (std::size_t off = 0; off < bytes.size(); off += plain_bytes)
-		{
-			std::size_t len = min(plain_bytes, bytes.size() - off);
-
-			std::vector<std::uint8_t> block(bytes.begin() + off,
-				bytes.begin() + off + len);
-
-			big_int m = bytes_to_bigint(block);
-			big_int c = rsa_encrypt(m, pub);
-
-			std::vector<std::uint8_t> out = bigint_to_bytes(c);
-			out.resize(modulus_bytes, 0);
-			encrypted.insert(encrypted.end(), out.begin(), out.end());
-		}
-
-		return std::string(encrypted.begin(), encrypted.end());
-	}
-
-	// can ONLY decrypt a byte string, to decrypt a base64 string call b64_decrypt
-	std::string rsa_decrypt(const std::string& str, const rsa_priv& prv)
-	{
-		std::vector<std::uint8_t> bytes(str.begin(), str.end());
-		std::vector<std::uint8_t> plain;
-
-		std::size_t modulus_bytes = (prv.n._bit_len + 7) / 8;
-		if (bytes.size() % modulus_bytes != 0)
-			throw std::invalid_argument("ciphertext length not a multiple of block size");
-
-		for (std::size_t off = 0; off < bytes.size(); off += modulus_bytes)
-		{
-			std::vector<std::uint8_t> block(bytes.begin() + off,
-				bytes.begin() + off + modulus_bytes);
-
-			big_int c = bytes_to_bigint(block);
-			big_int m = rsa_decrypt(c, prv);
-
-			std::vector<std::uint8_t> out = bigint_to_bytes(m);
-			plain.insert(plain.end(), out.begin(), out.end());
-		}
-
-		return std::string(plain.begin(), plain.end());
-	}
-
 	// returns a encrypted base64 string suitable for network traffic
 	std::string b64_encrypt(const std::string& str, const rsa_pub& pub)
 	{
@@ -508,6 +423,118 @@ public:
 	{
 		std::string byte_string = base64::from_base64(str);
 		return rsa_decrypt(byte_string, prv);
+	}
+
+	// Big-endian octet-string -> big_int
+	inline big_int OS2IP(const std::vector<uint8_t>& be)
+	{
+		std::vector<uint8_t> le(be.rbegin(), be.rend()); // flip to little-endian
+		return rsa::bytes_to_bigint(le);
+	}
+
+	// big_int -> big-endian octet-string of fixed length k (left-padded)
+	inline std::vector<uint8_t> I2OSP(const big_int& x, std::size_t k)
+	{
+		auto le = rsa::bigint_to_bytes(x);        // little-endian
+		if (le.size() > k) throw std::invalid_argument("I2OSP: integer too large");
+		le.resize(k, 0);                           // pad MSB side (which is end in LE)
+		return std::vector<uint8_t>(le.rbegin(), le.rend()); // back to BE
+	}
+
+	// returns a byte string not suitable for network traffic
+	std::string rsa_encrypt(const std::string& str, const rsa_pub& pub)
+	{
+		const std::size_t k = (pub.n._bit_len + 7) / 8;  // modulus bytes
+		const std::size_t hLen = 32;                        // SHA-256
+		const std::size_t maxPT = k - 2 * hLen - 2;            // OAEP payload per block
+
+		if (k < 2 * hLen + 2) throw std::invalid_argument("OAEP: modulus too small");
+
+		std::vector<uint8_t> bytes(str.begin(), str.end());
+		std::vector<uint8_t> encrypted;
+
+		for (std::size_t off = 0; off < bytes.size(); off += maxPT)
+		{
+			const std::size_t len = min(maxPT, bytes.size() - off);
+			std::vector<uint8_t> block(bytes.begin() + off, bytes.begin() + off + len);
+
+			auto EM = oaeppss::oaep_encode(block, k, rng, { 0x13, 0x37, 0x67, 0x69 });   // EM is big-endian k bytes
+			big_int m = OS2IP(EM);
+			big_int c = barrett::f_powmod(m, pub.e, pub.ctx);
+			auto    C = I2OSP(c, k);                         // big-endian k bytes
+
+			encrypted.insert(encrypted.end(), C.begin(), C.end());
+		}
+		return std::string(encrypted.begin(), encrypted.end());
+	}
+
+	// can ONLY decrypt a byte string, to decrypt a base64 string call b64_decrypt
+	std::string rsa_decrypt(const std::string& str, const rsa_priv& prv)
+	{
+		const std::size_t k = (prv.n._bit_len + 7) / 8;
+
+		std::vector<uint8_t> bytes(str.begin(), str.end());
+		if (bytes.size() % k != 0)
+			throw std::invalid_argument("ciphertext length not a multiple of block size");
+
+		std::vector<uint8_t> plain;
+
+		for (std::size_t off = 0; off < bytes.size(); off += k)
+		{
+			std::vector<uint8_t> C(bytes.begin() + off, bytes.begin() + off + k);
+			big_int c = OS2IP(C);
+			big_int m = barrett::f_powmod(c, prv.d, prv.ctx);
+			auto    EM = I2OSP(m, k);
+
+			auto M = oaeppss::oaep_decode(EM, { 0x13, 0x37, 0x67, 0x69 });
+			plain.insert(plain.end(), M.begin(), M.end());
+		}
+		return std::string(plain.begin(), plain.end());
+	}
+
+	std::string b64_sign(const std::string& message, const rsa_priv& key)
+	{
+		std::string byte_sig = rsa_sign(message, key);
+		return base64::to_base64(byte_sig);
+	}
+
+	bool b64_verify(const std::string& message, const std::string& sig, const rsa_pub& key)
+	{
+		std::string byte_sig = base64::from_base64(sig);
+		return rsa_verify(message, byte_sig, key);
+	}
+
+	std::string rsa_sign(const std::string& message, const rsa_priv& key)
+	{
+		uint8_t mHash[32];
+		picosha2::hash256(message.begin(), message.end(), mHash, mHash + 32);
+
+		const size_t k = (key.n._bit_len + 7) / 8;
+		auto EM = oaeppss::pss_encode(mHash, key.n._bit_len - 1, rng);
+
+		big_int m = OS2IP(EM);
+		big_int s = barrett::f_powmod(m, key.d, key.ctx);
+		auto   S = I2OSP(s, k);
+		return { S.begin(), S.end() };
+	}
+
+	bool rsa_verify(const std::string& message, const std::string& sig, const rsa_pub& key)
+	{
+		uint8_t mHash[32];
+		picosha2::hash256(message.begin(), message.end(), mHash, mHash + 32);
+
+		const size_t k = (key.n._bit_len + 7) / 8;
+		std::vector<uint8_t> S(sig.begin(), sig.end());
+		if (S.size() != k) {
+			if (S.size() > k) return false;
+			S.insert(S.begin(), k - S.size(), 0);
+		}
+
+		big_int s = OS2IP(S);
+		big_int m = barrett::f_powmod(s, key.e, key.ctx);
+		auto   EM = I2OSP(m, k);
+
+		return oaeppss::pss_verify(mHash, EM, key.n._bit_len - 1);
 	}
 
 public:
@@ -608,7 +635,7 @@ namespace key_export
 		big_int q = prv.q;
 		big_int d = prv.d;
 		big_int n = prv.n;
-		big_int e = (prv.ctx.n == prv.n) ? prv.ctx.n : big_int(65537);
+		big_int e = prv.e;
 
 		big_int dP = d % (p - 1);
 		big_int dQ = d % (q - 1);
@@ -729,7 +756,7 @@ namespace key_import
 		big_int p = der_integer(R);
 		big_int q = der_integer(R);
 
-		rsa_priv prv{ n, d, p, q };
+		rsa_priv prv{ n, d, e, p, q };
 		prv.ctx = barrett::make_ctx(prv.n);
 		return prv;
 	}
