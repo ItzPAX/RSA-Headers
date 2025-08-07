@@ -17,6 +17,8 @@ Do **NOT** use this in production environments
 ## Requirements
 C++20 and later is required for the bit length calculations
 
+Currently only supports windows systems due to secure random number generation
+
 ## Installation
 Just copy the three header files into your project and include "rsa.hpp" for examples see Usage or examples.cpp
 
