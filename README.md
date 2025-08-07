@@ -4,6 +4,8 @@ A (triple) header only way to implement RSA-OAEP and RSA-PSS functionality
 ## Disclaimer
 Do **NOT** use this in production environments
 
+While the key size may be large, this implementation lacks multiple critical protections found in hardened cryptographic libraries.
+
 ## Implemented and TODO
 - [x] big_int class for supporting keys up to 4096 bits
 - [x] OAEP RSA encryption
