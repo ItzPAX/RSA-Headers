@@ -541,7 +541,7 @@ namespace oaeppss
     }
 
     /* ------------------------------------------------------------------ */
-    /*  PSS  (RFC 8017, §8.1 – SHA-256, saltLen = 32)                     */
+    /*  PSS  (RFC 8017, 8.1 SHA-256, saltLen = 32)                     */
     /* ------------------------------------------------------------------ */
     inline std::vector<uint8_t> pss_encode(const uint8_t mHash[32], size_t emBits, s_rng::secure_rng& rng, size_t saltLen = 32)
     {
